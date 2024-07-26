@@ -154,12 +154,9 @@ def update_values_yaml(hostname, certificate):
 def create_route53_cname_record(hostname, target_dns_name, zone_id):
     route53 = boto3.client('route53')
 
-    # Replace with your Route 53 hosted zone ID
-    hosted_zone_id = zone_id
-
     try:
         response = route53.change_resource_record_sets(
-            HostedZoneId=hosted_zone_id,
+            HostedZoneId=zone_id,
             ChangeBatch={
                 'Changes': [
                     {
