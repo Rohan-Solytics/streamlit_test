@@ -104,9 +104,9 @@ def create_ssl_certificate(request):
     update_values_yaml(hostname, certificate)
 
     #route and map the host
-    dns = ""
-    zone_id = ""
-    create_route53_cname_record(hostname, dns, zone_id)
+    target_dns_name = ""  #"your-application-load-balancer-dns-name"
+    zone_id = ""  #"your-hosted-zone-id"
+    create_route53_cname_record(branch_name, hostname, target_dns_name, zone_id)
 
     return Response({
         "message": "SSL certificate created and stored successfully",
@@ -151,7 +151,7 @@ def update_values_yaml(hostname, certificate):
     except Exception as e:
         print(f"Error updating {values_path}: {str(e)}", exc_info=True)
         
-def create_route53_cname_record(hostname, target_dns_name, zone_id):
+def create_route53_cname_record(branch_name, hostname, target_dns_name, zone_id):
     route53 = boto3.client('route53')
 
     try:
@@ -166,6 +166,7 @@ def create_route53_cname_record(hostname, target_dns_name, zone_id):
                             'Type': 'CNAME',
                             'TTL': 300,
                             'ResourceRecords': [{'Value': target_dns_name}],
+                            'SetIdentifier': branch_name,
                         }
                     }
                 ]
