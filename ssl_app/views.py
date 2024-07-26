@@ -1,5 +1,7 @@
 import os
 import yaml
+import logging
+import boto3
 from datetime import datetime, timedelta
 from cryptography import x509
 from cryptography.x509.oid import NameOID
@@ -11,58 +13,68 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from .models import SSLCertificate
 
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 def generate_ssl_certificate(hostname):
-    # Generate a private key
-    private_key = rsa.generate_private_key(
-        public_exponent=65537,
-        key_size=2048,
-    )
+    try:
+        # Generate a private key
+        private_key = rsa.generate_private_key(
+            public_exponent=65537,
+            key_size=2048,
+        )
 
-    # Generate a public key
-    public_key = private_key.public_key()
+        # Generate a public key
+        public_key = private_key.public_key()
 
-    # Create a certificate builder
-    builder = x509.CertificateBuilder()
+        # Create a certificate builder
+        builder = x509.CertificateBuilder()
 
-    # Set the subject name
-    builder = builder.subject_name(x509.Name([
-        x509.NameAttribute(NameOID.COMMON_NAME, hostname),
-    ]))
+        # Set the subject name
+        builder = builder.subject_name(x509.Name([
+            x509.NameAttribute(NameOID.COMMON_NAME, hostname),
+        ]))
 
-    # Set the issuer name (self-signed, so it's the same as the subject)
-    builder = builder.issuer_name(x509.Name([
-        x509.NameAttribute(NameOID.COMMON_NAME, hostname),
-    ]))
+        # Set the issuer name (self-signed, so it's the same as the subject)
+        builder = builder.issuer_name(x509.Name([
+            x509.NameAttribute(NameOID.COMMON_NAME, hostname),
+        ]))
 
-    # Set the public key
-    builder = builder.public_key(public_key)
+        # Set the public key
+        builder = builder.public_key(public_key)
 
-    # Set the serial number
-    builder = builder.serial_number(x509.random_serial_number())
+        # Set the serial number
+        builder = builder.serial_number(x509.random_serial_number())
 
-    # Set the validity period
-    builder = builder.not_valid_before(datetime.utcnow())
-    builder = builder.not_valid_after(datetime.utcnow() + timedelta(days=365))
+        # Set the validity period
+        builder = builder.not_valid_before(datetime.utcnow())
+        builder = builder.not_valid_after(datetime.utcnow() + timedelta(days=365))
 
-    # Add basic constraints extension
-    builder = builder.add_extension(
-        x509.BasicConstraints(ca=False, path_length=None), critical=True,
-    )
+        # Add basic constraints extension
+        builder = builder.add_extension(
+            x509.BasicConstraints(ca=False, path_length=None), critical=True,
+        )
 
-    # Sign the certificate with the private key
-    certificate = builder.sign(
-        private_key=private_key, algorithm=hashes.SHA256(),
-    )
+        # Sign the certificate with the private key
+        certificate = builder.sign(
+            private_key=private_key, algorithm=hashes.SHA256(),
+        )
 
-    # Serialize the certificate and private key to PEM format
-    certificate_pem = certificate.public_bytes(serialization.Encoding.PEM)
-    private_key_pem = private_key.private_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.PKCS8,
-        encryption_algorithm=serialization.NoEncryption()
-    )
+        # Serialize the certificate and private key to PEM format
+        certificate_pem = certificate.public_bytes(serialization.Encoding.PEM)
+        private_key_pem = private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption()
+        )
 
-    return certificate_pem.decode(), private_key_pem.decode()
+        return certificate_pem.decode(), private_key_pem.decode()
+    except Exception as E:
+        logger.error(f"Error generating SSL certificate for {hostname}: {str(E)}")
+        print(E)
+        raise 
 
 @api_view(['POST'])
 def create_ssl_certificate(request):
@@ -71,10 +83,10 @@ def create_ssl_certificate(request):
         return Response({"error": "Branch name is required"}, status=status.HTTP_400_BAD_REQUEST)
 
     hostname = f"{branch_name}.solytics.us"
-    
+
     # Generate SSL certificate
     certificate, private_key = generate_ssl_certificate(hostname)
-    
+
     # Store in database
     ssl_cert, created = SSLCertificate.objects.update_or_create(
         branch_name=branch_name,
@@ -84,13 +96,18 @@ def create_ssl_certificate(request):
             'private_key': private_key
         }
     )
-    
+
     # Set environment variables
     set_ssl_env_vars(branch_name, certificate, private_key)
-    
+
     # Update values.yaml
     update_values_yaml(hostname, certificate)
-    
+
+    #route and map the host
+    dns = ""
+    zone_id = ""
+    create_route53_cname_record(hostname, dns, zone_id)
+
     return Response({
         "message": "SSL certificate created and stored successfully",
         "branch_name": branch_name,
@@ -133,3 +150,31 @@ def update_values_yaml(hostname, certificate):
 
     except Exception as e:
         print(f"Error updating {values_path}: {str(e)}", exc_info=True)
+        
+def create_route53_cname_record(hostname, target_dns_name, zone_id):
+    route53 = boto3.client('route53')
+
+    # Replace with your Route 53 hosted zone ID
+    hosted_zone_id = zone_id
+
+    try:
+        response = route53.change_resource_record_sets(
+            HostedZoneId=hosted_zone_id,
+            ChangeBatch={
+                'Changes': [
+                    {
+                        'Action': 'UPSERT',
+                        'ResourceRecordSet': {
+                            'Name': hostname,
+                            'Type': 'CNAME',
+                            'TTL': 300,
+                            'ResourceRecords': [{'Value': target_dns_name}],
+                        }
+                    }
+                ]
+            }
+        )
+        logger.info(f"Successfully created CNAME record for {hostname} pointing to {target_dns_name}")
+    except Exception as e:
+        logger.error(f"Error creating CNAME record for {hostname}: {str(e)}")
+        raise
