@@ -12,165 +12,103 @@ from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from .models import SSLCertificate
-
+import aioboto3
+import asyncio
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def generate_ssl_certificate(hostname):
-    try:
-        # Generate a private key
-        private_key = rsa.generate_private_key(
-            public_exponent=65537,
-            key_size=2048,
-        )
+# async def check_certificate_status(certificate_arn):
+#     async with aioboto3.create_client('acm') as acm_client:
+#         try:
+#             # Describe the certificate
+#             response = await acm_client.describe_certificate(CertificateArn=certificate_arn)
+#             # Extract the status from the response
+#             certificate_status = response['Certificate']['Status']
+#             return certificate_status
+#         except Exception as e:
+#             print(f"Error checking certificate status: {e}")
+#             return None
 
-        # Generate a public key
-        public_key = private_key.public_key()
-
-        # Create a certificate builder
-        builder = x509.CertificateBuilder()
-
-        # Set the subject name
-        builder = builder.subject_name(x509.Name([
-            x509.NameAttribute(NameOID.COMMON_NAME, hostname),
-        ]))
-
-        # Set the issuer name (self-signed, so it's the same as the subject)
-        builder = builder.issuer_name(x509.Name([
-            x509.NameAttribute(NameOID.COMMON_NAME, hostname),
-        ]))
-
-        # Set the public key
-        builder = builder.public_key(public_key)
-
-        # Set the serial number
-        builder = builder.serial_number(x509.random_serial_number())
-
-        # Set the validity period
-        builder = builder.not_valid_before(datetime.utcnow())
-        builder = builder.not_valid_after(datetime.utcnow() + timedelta(days=365))
-
-        # Add basic constraints extension
-        builder = builder.add_extension(
-            x509.BasicConstraints(ca=False, path_length=None), critical=True,
-        )
-
-        # Sign the certificate with the private key
-        certificate = builder.sign(
-            private_key=private_key, algorithm=hashes.SHA256(),
-        )
-
-        # Serialize the certificate and private key to PEM format
-        certificate_pem = certificate.public_bytes(serialization.Encoding.PEM)
-        private_key_pem = private_key.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=serialization.NoEncryption()
-        )
-
-        return certificate_pem.decode(), private_key_pem.decode()
-    except Exception as E:
-        logger.error(f"Error generating SSL certificate for {hostname}: {str(E)}")
-        print(E)
-        raise 
+# async def main(certificate_arn):
+#     status = await check_certificate_status(certificate_arn)
+#     if status == "ISSUED":
+#         print("The certificate status is ISSUED.")
+#     else:
+#         print(f"The certificate status is {status}.")
 
 @api_view(['POST'])
 def create_ssl_certificate(request):
     branch_name = request.data.get('branch_name')
     if not branch_name:
         return Response({"error": "Branch name is required"}, status=status.HTTP_400_BAD_REQUEST)
-
     hostname = f"{branch_name}.solytics.us"
 
-    # Generate SSL certificate
-    certificate, private_key = generate_ssl_certificate(hostname)
-
-    # Store in database
-    ssl_cert, created = SSLCertificate.objects.update_or_create(
-        branch_name=branch_name,
-        defaults={
-            'hostname': hostname,
-            'certificate': certificate,
-            'private_key': private_key
-        }
-    )
-
-    # Set environment variables
-    set_ssl_env_vars(branch_name, certificate, private_key)
-
-    # Update values.yaml
-    update_values_yaml(hostname, certificate)
-
     #route and map the host
-    target_dns_name = ""  #"your-application-load-balancer-dns-name"
-    zone_id = ""  #"your-hosted-zone-id"
+    target_dns_name = "nimbus-dev-streamlit-991053992.ap-south-1.elb.amazonaws.com"  #"your-application-load-balancer-dns-name"
+    zone_id = "Z073211023REDLUYMTKDC"  #"your-hosted-zone-id"
     create_route53_cname_record(branch_name, hostname, target_dns_name, zone_id)
 
+    #create certificate and Retrieve certificate ARN 
+    acm_client = boto3.client('acm')
+    response = acm_client.request_certificate(
+    DomainName=hostname,
+    ValidationMethod='DNS',
+    Options={
+        'CertificateTransparencyLoggingPreference': 'ENABLED'
+    }
+    )
+    certificate_arn = response['CertificateArn']
+    print(f'Certificate ARN: {certificate_arn}')
+    
+    # Debugging output
+    certificate_arn = None
+    paginator = acm_client.get_paginator('list_certificates')
+    for page in paginator.paginate():
+        for cert in page['CertificateSummaryList']:
+            # Debugging output
+            print(f"Checking certificate: {cert['DomainName']} with ARN {cert['CertificateArn']}")
+            if cert['DomainName'] == hostname:
+                certificate_arn = cert['CertificateArn']
+                break
+        if certificate_arn:
+            break
+
+    # asyncio.run(main(certificate_arn))
+    
     return Response({
         "message": "SSL certificate created and stored successfully",
         "branch_name": branch_name,
         "hostname": hostname,
-        "certificate": certificate
-    }, status=status.HTTP_201_CREATED)
+        "certificate_arn": certificate_arn
+    }, status=status.HTTP_201_CREATED) 
 
-def set_ssl_env_vars(branch_name, certificate, private_key):
-    os.environ[f'SSL_CERT_{branch_name}'] = certificate
-    os.environ[f'SSL_KEY_{branch_name}'] = private_key
-
-def update_values_yaml(hostname, certificate):
-    values_path = 'values.yaml'  # Assuming it's in the same directory
-
-    print(f"Attempting to update file: {values_path}")
-
-    try:
-        if os.path.exists(values_path):
-            with open(values_path, 'r') as file:
-                values = yaml.safe_load(file) or {}
-            print(f"Existing content: {values}")
-        else:
-            values = {'ssl_certificate': "", 'hostname': ""}
-            print("File doesn't exist. Starting with default structure.")
-
-        # Update the SSL certificate and hostname
-        values['ssl_certificate'] = certificate
-        values['hostname'] = hostname
-
-        print(f"Updated values: {values}")
-
-        with open(values_path, 'w') as file:
-            yaml.dump(values, file, default_flow_style=False)
-        print(f"Successfully updated {values_path} with SSL details for {hostname}")
-
-        # Verify the file was updated
-        with open(values_path, 'r') as file:
-            updated_content = file.read()
-        print(f"File content after update:\n{updated_content}")
-
-    except Exception as e:
-        print(f"Error updating {values_path}: {str(e)}", exc_info=True)
-        
-def create_route53_cname_record(branch_name, hostname, target_dns_name, zone_id):
+       
+def create_route53_cname_record(branch_name, hostname, target_dns_name, zone_id, weight=None):
     route53 = boto3.client('route53')
-
     try:
+        change_batch = {
+            'Changes': [
+                {
+                    'Action': 'UPSERT',
+                    'ResourceRecordSet': {
+                        'Name': hostname,
+                        'Type': 'CNAME',
+                        'TTL': 300,
+                        'ResourceRecords': [{'Value': target_dns_name}],
+                    }
+                }
+            ]
+        }
+        if weight is not None:
+            change_batch['Changes'][0]['ResourceRecordSet'].update({
+                'SetIdentifier': branch_name,
+                'Weight': weight
+            })
         response = route53.change_resource_record_sets(
             HostedZoneId=zone_id,
-            ChangeBatch={
-                'Changes': [
-                    {
-                        'Action': 'UPSERT',
-                        'ResourceRecordSet': {
-                            'Name': hostname,
-                            'Type': 'CNAME',
-                            'TTL': 300,
-                            'ResourceRecords': [{'Value': target_dns_name}],
-                            'SetIdentifier': branch_name,
-                        }
-                    }
-                ]
-            }
+            ChangeBatch=change_batch
         )
         logger.info(f"Successfully created CNAME record for {hostname} pointing to {target_dns_name}")
     except Exception as e:
