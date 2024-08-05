@@ -1,38 +1,119 @@
-hostname: test-branch.solytics.us
-ssl_certificate: '-----BEGIN CERTIFICATE-----
+# Default values for stearmlit.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
 
-  MIIC4jCCAcqgAwIBAgIUJqnKmGIOJCqeoFoV/io9iIIF+MgwDQYJKoZIhvcNAQEL
+replicaCount: 1
 
-  BQAwIjEgMB4GA1UEAwwXdGVzdC1icmFuY2guc29seXRpY3MudXMwHhcNMjQwNzI1
+image:
+  repository: 842928376651.dkr.ecr.ap-south-1.amazonaws.com/nimbus-streamlit
+  pullPolicy: Always
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: ""
 
-  MDUxNTAxWhcNMjUwNzI1MDUxNTAxWjAiMSAwHgYDVQQDDBd0ZXN0LWJyYW5jaC5z
+imagePullSecrets: []
+nameOverride: "streamlit-streamlitrohan"
+fullnameOverride: "streamlit-streamlitrohan"
 
-  b2x5dGljcy51czCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAMQ0KyYW
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Automatically mount a ServiceAccount's API credentials?
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
 
-  NbBOTsYzUa3mpgiOpF1FipgMkfP7nXATDYwXIZz+Dd/NIoSuDFUDtaNi6cmcSkrh
+podAnnotations: {}
+podLabels: {}
 
-  qPU/FZU1t2OPreb7vY4sNYiGFn0kCrgJQ7Em6LHYXVCOYdR2VBNTxnyI1LX9r3Hb
+podSecurityContext: {}
+  # fsGroup: 2000
 
-  RhRs0Mq0Y0wjMkBeVD43mNDWZ9O1wB2Q/Cuy0WmbV0FDzqkjo1SyNIQ/pMjirtI/
+securityContext: {}
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # readOnlyRootFilesystem: true
+  # runAsNonRoot: true
+  # runAsUser: 1000
 
-  bb1BwHkEjdwu5houcNhXc8HjKqpOuSwdp/Gi2A9Hnr3PCDS3J1SyzoKK9M0VvB7Y
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8501
+  protocol: TCP
 
-  R0wmPToNakBBe4sHg4rqhiCmBEIfRhqQBZ3zrClcN9wnHPwkZZ0buH7Lpemojgwi
+ingress:
+  enabled: true
+  className: "alb"
+  annotations:
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/group.name: nimbus-dev-streamlit
+    alb.ingress.kubernetes.io/load-balancer-name: nimbus-dev-streamlit
+    alb.ingress.kubernetes.io/healthcheck-path: /
+    alb.ingress.kubernetes.io/success-codes: '200-299'
+    alb.ingress.kubernetes.io/healthcheck-port: traffic-port
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: '15'
+    alb.ingress.kubernetes.io/healthcheck-timeout-seconds: '5'
+    alb.ingress.kubernetes.io/subnets: subnet-07b56c94d6a2070e8, subnet-0dd2603b99fa5cc7e,
+      subnet-01ba189aa6d8f1452
+    alb.ingress.kubernetes.io/certificate-arn: "arn:aws:acm:ap-south-1:842928376651:certificate/a37ed232-1c96-447a-a75d-e9a1a581fb71"
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443},{"HTTP":80}]'
+    alb.ingress.kubernetes.io/force-ssl-redirect: "true"
+    alb.ingress.kubernetes.io/actions.ssl-redirect: '{"Type": "redirect", "RedirectConfig":
+      { "Protocol": "HTTPS", "Port": "443", "StatusCode": "HTTP_301"}}'
+  hosts:
+    - host: streamlit-rohan.solytics.us
+      paths:
+        - path: /*
+          pathType: ImplementationSpecific
+  tls: []
+  #  - secretName: chart-example-tls
+  #    hosts:
+  #      - chart-example.local
 
-  IfZgV8JQtNHFJe8CAwEAAaMQMA4wDAYDVR0TAQH/BAIwADANBgkqhkiG9w0BAQsF
+resources:
+  limits:
+    cpu: 500m
+    memory: 500Mi
+  requests:
+    cpu: 500m
+    memory: 500Mi
 
-  AAOCAQEAJjE6KHCBP+XsmzjuLZcI60yWw/Vv6N2P2ZOawggOCqrApmpFXv0U3Gg7
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 100
+  targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80
 
-  QzS30YdRzhtG7bq6hL4x+r4etJnft0bctfOXFKv08kWvpWdaAsgq/jKOvlfhTw8K
+# Additional volumes on the output Deployment definition.
+volumes: []
+# - name: foo
+#   secret:
+#     secretName: mysecret
+#     optional: false
 
-  TD6hSaqxwxssNbzlEgh2++OEFvKO4vsb2k4EmUPiZWhFzdXRcZ+2YvklFqqITZeN
+# Additional volumeMounts on the output Deployment definition.
+volumeMounts: []
+# - name: foo
+#   mountPath: "/etc/foo"
+#   readOnly: true
 
-  RPLPk78beh9n5mfRrso2bKRJKE+8hTYJ5nD1Yf8gfPiwYmJCUdQja8yX3l10Ik0H
+nodeSelector:
+  Environment: "Dev"
+  Project: "Nimbus"
 
-  5fHRTUnGnJ5PsStfVX2fiMBkQd0xwk+hRbA+BkoSrxfT8gZJjK0WiHxATN18phie
+tolerations:
+  - key: "Environment"
+    operator: "Equal"
+    value: "Dev"
+    effect: "NoSchedule"
+  - key: "Project"
+    operator: "Equal"
+    value: "Nimbus"
+    effect: "NoSchedule"
 
-  w5ko4jwGpSafyf87FQluSGSeKydr1A==
-
-  -----END CERTIFICATE-----
-
-  '
+affinity: {}
