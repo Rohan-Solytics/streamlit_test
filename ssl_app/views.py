@@ -14,6 +14,8 @@ from rest_framework.response import Response
 from .models import SSLCertificate
 import aioboto3
 import asyncio
+import time
+from ruamel.yaml import YAML
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -43,37 +45,49 @@ def create_ssl_certificate(request):
     branch_name = request.data.get('branch_name')
     if not branch_name:
         return Response({"error": "Branch name is required"}, status=status.HTTP_400_BAD_REQUEST)
-    hostname = f"{branch_name}.solytics.us"
+    
+    sanitized_branch_name = branch_name.replace('_', '-')
+    hostname = f"{sanitized_branch_name}.solytics.us"
 
     #route and map the host
     target_dns_name = "nimbus-dev-streamlit-991053992.ap-south-1.elb.amazonaws.com"  #"your-application-load-balancer-dns-name"
     zone_id = "Z073211023REDLUYMTKDC"  #"your-hosted-zone-id"
-    create_route53_cname_record(branch_name, hostname, target_dns_name, zone_id)
+    create_route53_cname_record(sanitized_branch_name, hostname, target_dns_name, zone_id)
 
     #create certificate and Retrieve certificate ARN 
     acm_client = boto3.client('acm')
     response = acm_client.request_certificate(
-    DomainName=hostname,
-    ValidationMethod='DNS',
-    Options={
-        'CertificateTransparencyLoggingPreference': 'ENABLED'
-    }
-    )
+            DomainName=hostname,
+            ValidationMethod='DNS',
+            Options={'CertificateTransparencyLoggingPreference': 'ENABLED'}
+        )
     certificate_arn = response['CertificateArn']
     print(f'Certificate ARN: {certificate_arn}')
     
-    # Debugging output
-    certificate_arn = None
-    paginator = acm_client.get_paginator('list_certificates')
-    for page in paginator.paginate():
-        for cert in page['CertificateSummaryList']:
-            # Debugging output
-            print(f"Checking certificate: {cert['DomainName']} with ARN {cert['CertificateArn']}")
-            if cert['DomainName'] == hostname:
-                certificate_arn = cert['CertificateArn']
+    # Implement a retry mechanism to wait for the certificate to be available
+    retry_count = 0
+    max_retries = 5
+    while retry_count < max_retries:
+        certificate_arn = None
+        paginator = acm_client.get_paginator('list_certificates')
+        for page in paginator.paginate():
+            for cert in page['CertificateSummaryList']:
+                if cert['DomainName'] == hostname:
+                    certificate_arn = cert['CertificateArn']
+                    break
+            if certificate_arn:
                 break
         if certificate_arn:
             break
+        else:
+            print("Certificate not available yet. Retrying...")
+            time.sleep(10)  # Wait for 10 seconds before retrying
+            retry_count += 1
+
+    if not certificate_arn:
+        return Response({"error": "Certificate ARN not found after retries"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    update_values_yml(sanitized_branch_name, hostname, certificate_arn)
 
     # asyncio.run(main(certificate_arn))
     
@@ -114,3 +128,37 @@ def create_route53_cname_record(branch_name, hostname, target_dns_name, zone_id,
     except Exception as e:
         logger.error(f"Error creating CNAME record for {hostname}: {str(e)}")
         raise
+
+def update_values_yml(branch_name, host_name, certificate_arn):
+    print("updating values.yaml")
+    
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(current_dir)
+    values_file_path = os.path.join(parent_dir, 'values.yaml')
+    # values_file_path = 'values.yml'  # Update this with the actual path to your values.yml file
+
+    yaml = YAML()
+    yaml.preserve_quotes = True
+    yaml.indent(mapping=2, sequence=4, offset=2)
+
+    try:
+        # Read the existing values.yml file
+        if os.path.exists(values_file_path):
+            with open(values_file_path, 'r') as file:
+                values = yaml.load(file)
+
+            continuous_branch_name = branch_name.replace('-', '').replace('_', '').lower()
+            # Update the necessary fields
+            values['ingress']['annotations']['alb.ingress.kubernetes.io/certificate-arn'] = certificate_arn
+            values['ingress']['hosts'][0]['host'] = host_name
+            values['nameOverride'] = f"streamlit-{continuous_branch_name}"
+            values['fullnameOverride'] = f"streamlit-{continuous_branch_name}"
+
+            # Write the updated values back to the values.yml file
+            with open(values_file_path, 'w') as file:
+                yaml.dump(values, file)
+
+            print(f"values.yaml file updated successfully at {values_file_path}")
+    
+    except Exception as e:
+        print(f"Error updating : {str(e)}")
