@@ -1,7 +1,7 @@
 from django.urls import path
-from . import views
+from .views import CheckCertificateStatus, CreateSSLCertificate
 
 urlpatterns = [
-    path('create-ssl/', views.create_ssl_certificate, name='create-ssl'),
-    path('check-ssl-status/', views.check_certificate_status, name='check-status'),
+    path('create-ssl/', CreateSSLCertificate.as_view(), name='create-ssl'),
+    path('check-ssl-status/', CheckCertificateStatus.as_view(), name='check-status'),
 ]
