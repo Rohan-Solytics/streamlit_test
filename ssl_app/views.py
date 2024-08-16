@@ -1,6 +1,7 @@
 import os
 import logging
 import boto3
+import time
 from rest_framework import status
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -62,7 +63,9 @@ class CreateSSLCertificate(APIView):
                     if domain_validation_options and 'ResourceRecord' in domain_validation_options[0]:
                         dns_records = domain_validation_options[0]['ResourceRecord']
                         break
-                print(f"Attempt {retry_count + 1}: Certificate details retrieved, but DNS records not yet available.")
+                print(f"Attempt {retry_count}: Certificate details retrieved, but DNS records not yet available.")
+                retry_count += 1
+                time.sleep(5)
             except Exception as e:
                 return Response({"error": f"Failed to get validation records: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
