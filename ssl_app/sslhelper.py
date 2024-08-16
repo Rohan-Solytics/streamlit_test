@@ -22,10 +22,16 @@ def create_route53_validation_record(zone_id, record_name, record_value):
 
 def update_values_yml(branch_name, host_name, certificate_arn):
     print("updating values.yaml")
-    
+    # Get the directory where views.py is located
     current_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # Navigate to the parent directory and then to the streamlit-helm directory
     parent_dir = os.path.dirname(current_dir)
-    values_file_path = os.path.join(parent_dir, 'values.yaml')
+
+    streamlit_helm_dir = os.path.join(parent_dir, 'streamlit-helm')
+    # values_file_path = os.path.join(parent_dir, 'values.yaml')
+    values_file_path = os.path.join(streamlit_helm_dir, 'values.yaml')
+    
     # values_file_path = 'values.yml'  # Update this with the actual path to your values.yml file
     yaml = YAML()
     yaml.preserve_quotes = True
